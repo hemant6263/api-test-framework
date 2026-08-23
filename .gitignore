@@ -1,0 +1,34 @@
+# --- build / tooling ---
+.venv/
+venv/
+*.egg-info/
+__pycache__/
+*.pyc
+.pytest_cache/
+allure-results/
+allure-report/
+.idea/
+
+# --- secrets: NEVER commit ---
+# Credentials belong in environment variables (AC_TOKEN, AC_USER, AC_PASS),
+# never in a tracked file. These patterns catch the usual local overrides.
+.env
+.env.*
+!.env.example
+local.yml
+local.yaml
+*.local.yml
+*.local.yaml
+secrets*
+*secret*
+*credential*
+*.pem
+*.key
+*.p12
+*.pfx
+.netrc
+google-profile/
+
+# log files
+*.log
+logs/

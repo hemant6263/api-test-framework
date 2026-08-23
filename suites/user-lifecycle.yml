@@ -1,0 +1,97 @@
+# Create -> search -> delete -> verify gone. One user, one scenario.
+#
+# Run: AC_TOKEN=<key> .venv/bin/python -m pytest tests/test_suites.py -q
+#
+# BEFORE FIRST RUN: set `tenantRole` below to a role that exists in your tenant.
+# The API validates it and throws "Provided Tenant Role Not Found <x>" otherwise.
+# List valid roles with:  GET /user/roles
+name: User lifecycle - create, search, delete
+tags: [smoke, users]
+env: qa
+
+auth:
+  type: bearer
+
+vars:
+  # Unique per run so repeat runs never collide on the unique-email check.
+  testEmail: "apitest-${uuid}@example.com"
+  testName: "API Test User"
+  tenantRole: "admin"          # <- must exist in your tenant; see GET /user/roles
+
+steps:
+
+  # 1. CREATE — POST /user/add/user returns NameIdPair {id, name}: flat, unwrapped.
+  #    Requires tenantRole OR teamInfo; email must be unique in the tenant.
+  - name: create user
+    request:
+      method: POST
+      path: /user/add/user
+      headers:
+        Content-Type: application/json
+      body:
+        email: "${testEmail}"
+        name: "${testName}"
+        tenantRole: "${tenantRole}"
+    expect:
+      status: 200
+      assertions:
+        - { path: "$.id",   notNull: true }
+        - { path: "$.id",   type: number }
+        - { path: "$.name", notNull: true }
+    capture:
+      userId: "$.id"                       # -> ${userId}, stays an int
+
+  # 2. SEARCH — POST /api/v2/user/search filters SERVER-side by exact email.
+  #    Response is wrapped twice: BaseResponseDto.data -> Spring Page.content
+  #      { "data": { "content": [ ... ], "totalElements": 1 }, "success": true }
+  - name: search for the created user by email
+    request:
+      method: POST
+      path: /api/v2/user/search
+      headers:
+        Content-Type: application/json
+      body:
+        email: ["${testEmail}"]            # Set<String> -> exact IN match
+    expect:
+      status: 200
+      assertions:
+        - { path: "$.success", eq: true }
+        # exactly one hit — not "at least one"
+        - { path: "$.data.totalElements",     eq: 1 }
+        - { path: "$.data.content",           size: 1 }
+        # and it is OUR user: the id must match what create returned
+        - { path: "$.data.content[0].userId", eq: "${userId}" }
+        - { path: "$.data.content[0].email",  eq: "${testEmail}" }
+        - { path: "$.data.content[0].name",   eq: "${testName}" }
+
+  # 3. DELETE — V1 remove returns void, so assert on status only. No body.
+  - name: delete user
+    request:
+      method: DELETE
+      path: "/user/data/remove/${userId}"
+    expect:
+      status: 200
+
+  # 4. VERIFY GONE — the delete is only proven by the user no longer being found.
+  - name: verify user is gone
+    request:
+      method: POST
+      path: /api/v2/user/search
+      headers:
+        Content-Type: application/json
+      body:
+        email: ["${testEmail}"]
+    expect:
+      status: 200
+      assertions:
+        - { path: "$.data.totalElements", eq: 0 }
+        - { path: "$.data.content",       isEmpty: true }
+
+# Safety net: if the delete step never ran (an earlier step failed), remove the
+# user anyway so repeat runs don't leave orphans. A 4xx here is fine and does not
+# fail the suite — it just means there was nothing to clean up.
+cleanup:
+  - name: remove test user if still present
+    request:
+      method: DELETE
+      path: "/user/data/remove/${userId}"

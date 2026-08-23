@@ -1,0 +1,66 @@
+# EXAMPLE — a 3-step chain showing capture -> reuse -> async poll -> cleanup.
+# Rename to .yml (drop .disabled) and fix the paths/fields for a real API to run it.
+#
+# This is the file an intern copies to write a new test. Nothing else changes.
+name: Example - product then finding lifecycle
+tags: [example]
+env: qa
+
+auth:
+  type: bearer                     # AC_TOKEN env var
+
+vars:
+  productName: "apitest-${uuid}"   # unique per run, so reruns never collide
+
+steps:
+
+  # 1. create something, remember its id
+  - name: create product
+    request:
+      method: POST
+      path: /api/product
+      body:
+        name: "${productName}"
+        type: APPLICATION
+    expect:
+      status: 200
+      assertions:
+        - { path: "$.content.name", eq: "${productName}" }
+        - { path: "$.content.id",   notNull: true }
+    capture:
+      productId: "$.content.id"    # -> ${productId}, typed (int stays int)
+
+  # 2. seed data into api2 using api1's output
+  - name: seed finding into that product
+    request:
+      method: POST
+      path: /api/finding
+      body:
+        productId: "${productId}"
+        title: "SQLi in login"
+        severity: High
+    expect:
+      status: 200
+      assertions:
+        - { path: "$.content.productId", eq: "${productId}" }
+    capture:
+      findingId: "$.content.id"
+
+  # 3. poll until an async computation lands
+  - name: verify SLA applied
+    request:
+      method: GET
+      path: "/api/finding/${findingId}"
+    retry: { until: pass, timeout: 30s, interval: 2s }
+    expect:
+      status: 200
+      assertions:
+        - { path: "$.content.slaDueDate", notNull: true }
+        - { path: "$.content.severity",   in: [High, Critical] }
+        - { path: "$.content.tags",       size: 2 }
+        - { path: "$.content.createdAt",  matchesRegex: "^\\d{4}-\\d{2}-\\d{2}" }
+
+# runs in reverse order, even if a step above failed
+cleanup:
+  - { request: { method: DELETE, path: "/api/finding/${findingId}" } }
+  - { request: { method: DELETE, path: "/api/product/${productId}" } }

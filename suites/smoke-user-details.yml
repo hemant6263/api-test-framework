@@ -1,0 +1,20 @@
+# Smallest real suite: prove bearer auth works and the API answers.
+# Run: AC_TOKEN=<token> .venv/bin/pytest tests/test_suites.py
+name: Smoke - authenticated user can read own profile
+tags: [smoke]
+env: qa
+
+auth:
+  type: bearer          # token comes from the AC_TOKEN env var
+
+steps:
+  - name: get user details
+    request:
+      method: GET
+      path: /user/details
+    expect:
+      status: 200
+      assertions:
+        - { path: "$.email",     notNull: true }
+        - { path: "$.id",        type: number }
+        - { path: "$.tenantId",  notNull: true }

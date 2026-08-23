@@ -1,0 +1,6 @@
+# QA environment. Secrets NEVER live here — only references to env vars.
+baseUrl: https://qa.example.com
+timeout: 30s
+verifyTls: true
+headers:
+  Accept: application/json
