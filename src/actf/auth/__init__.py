@@ -12,11 +12,12 @@ from __future__ import annotations
 from .base import AuthError, AuthProvider, AuthState
 from .bearer import BearerAuthProvider
 from .cookies import parse_set_cookie
+from .login import LoginAuthProvider
 from .none import NoneAuthProvider
 from .password import PasswordAuthProvider
 
 BUILTIN_AUTH_PROVIDERS: tuple[AuthProvider, ...] = (
-    NoneAuthProvider(), BearerAuthProvider(), PasswordAuthProvider(),
+    NoneAuthProvider(), BearerAuthProvider(), PasswordAuthProvider(), LoginAuthProvider(),
 )
 
 
@@ -29,6 +30,6 @@ def build_auth_registry(custom: list[AuthProvider] | None = None) -> dict[str, A
 
 __all__ = [
     "AuthError", "AuthProvider", "AuthState", "BUILTIN_AUTH_PROVIDERS",
-    "BearerAuthProvider", "NoneAuthProvider", "PasswordAuthProvider",
+    "BearerAuthProvider", "LoginAuthProvider", "NoneAuthProvider", "PasswordAuthProvider",
     "build_auth_registry", "parse_set_cookie",
 ]

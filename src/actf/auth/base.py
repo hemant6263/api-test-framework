@@ -17,6 +17,7 @@ class AuthState:
     """What to add to every subsequent request."""
     headers: dict[str, str] = field(default_factory=dict)
     cookies: dict[str, str] = field(default_factory=dict)
+    query: dict[str, str] = field(default_factory=dict)
 
     def apply(self, request: Request) -> None:
         for k, v in self.headers.items():
@@ -25,6 +26,8 @@ class AuthState:
             jar = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
             existing = request.headers.get("Cookie")
             request.headers["Cookie"] = f"{existing}; {jar}" if existing else jar
+        for k, v in self.query.items():
+            request.query.setdefault(k, v)
 
 class AuthProvider(Protocol):
     type: str

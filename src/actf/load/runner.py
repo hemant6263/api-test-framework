@@ -119,8 +119,8 @@ class LoadRunner:
         if provider is None:
             raise RuntimeError(f"auth.type {scenario.auth.type!r} has no provider")
         ctx = SuiteContext()
-        resolved = type(scenario.auth)(
-            type=scenario.auth.type,
+        resolved = replace(
+            scenario.auth,
             token=ctx.resolve(scenario.auth.token) if scenario.auth.token else None,
             username=ctx.resolve(scenario.auth.username) if scenario.auth.username else None,
             password=ctx.resolve(scenario.auth.password) if scenario.auth.password else None,

@@ -28,7 +28,10 @@ from .model import (
 )
 
 HTTP_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
-AUTH_TYPES = {"none", "bearer", "password", "google"}
+AUTH_TYPES = {"none", "bearer", "password", "login", "google"}
+_LOGIN_KEYS = {
+    "type", "username", "password", "loginPath", "loginMethod",
+    "usernameField", "passwordField", "capture", "headers", "cookies", "query"}
 
 # Keys inside an assertion that are NOT the matcher itself.
 _ASSERTION_META = {"path", "from", "expr", "via"}
@@ -222,21 +225,45 @@ def _parse_step(node: Any, where: str, *, require_name: bool = True) -> Step:
     )
 
 
+def _parse_string_map(node: Any, where: str) -> dict[str, str]:
+    node = require_mapping(node, where)
+    return {str(k): str(v) for k, v in node.items()}
+
+
 def parse_auth(node: Any, where: str) -> AuthSpec:
     node = require_mapping(node, where)
     if not node:
         return AuthSpec()
-    _reject_unknown(node, {"type", "token", "username", "password"}, where)
     atype = str(node.get("type", "none")).lower()
     if atype not in AUTH_TYPES:
         raise SuiteError(
             f"{where}.type: {atype!r} is not supported "
             f"({', '.join(sorted(AUTH_TYPES))})")
+
+    if atype != "login":
+        _reject_unknown(node, {"type", "token", "username", "password"}, where)
+        return AuthSpec(
+            type=atype,
+            token=node.get("token"),
+            username=node.get("username"),
+            password=node.get("password"),
+        )
+
+    _reject_unknown(node, _LOGIN_KEYS, where)
+    if "loginPath" not in node:
+        raise SuiteError(f'{where}: missing required key "loginPath" for auth.type "login"')
     return AuthSpec(
         type=atype,
-        token=node.get("token"),
         username=node.get("username"),
         password=node.get("password"),
+        login_path=str(node["loginPath"]),
+        login_method=str(node.get("loginMethod", "POST")).upper(),
+        username_field=str(node.get("usernameField", "username")),
+        password_field=str(node.get("passwordField", "password")),
+        login_captures=parse_captures(node.get("capture"), f"{where}.capture"),
+        login_headers=_parse_string_map(node.get("headers"), f"{where}.headers"),
+        login_cookies=_parse_string_map(node.get("cookies"), f"{where}.cookies"),
+        login_query=_parse_string_map(node.get("query"), f"{where}.query"),
     )
 
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from ..auth import AuthProvider, AuthState, build_auth_registry
@@ -52,8 +53,8 @@ class SuiteRunner:
                 f"auth.type {spec.type!r} has no provider. "
                 f"Available: {', '.join(sorted(self.auth_providers))}")
         # Resolve ${env:...} in credentials before using them as a cache key.
-        resolved = type(spec)(
-            type=spec.type,
+        resolved = replace(
+            spec,
             token=ctx.resolve(spec.token) if spec.token else None,
             username=ctx.resolve(spec.username) if spec.username else None,
             password=ctx.resolve(spec.password) if spec.password else None,

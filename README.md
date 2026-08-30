@@ -243,6 +243,7 @@ builtins; `__import__`, `open` and friends are unreachable.
 |---|---|
 | `bearer` | **Recommended.** `AC_TOKEN` env var → `Authorization: Bearer <key>` |
 | `password` | `POST /public/login`, carries the session cookie + `X-CSRF-TOKEN` |
+| `login` | fully configurable login flow — see below |
 | `none` | no auth |
 
 **Why bearer is the default:** an API key bypasses session handling,
@@ -254,6 +255,47 @@ Auth resolves **once per suite** and is cached, so a login is not repeated per s
 
 Secrets never go in YAML. Use `${env:...}`, and note that everything attached to
 an Allure report is masked (`Authorization`, `Cookie`, `password`, `token`, …).
+
+### `login` — a custom login endpoint
+
+`password` is hardcoded to this API's actual login shape (`POST
+/public/login`, `{email, password}`, session cookie + `X-CSRF-TOKEN`
+response). `login` is the escape hatch for anything else: the endpoint,
+request field names, what to extract from the response, and **where each
+extracted value goes on later requests** are all declared in YAML. Nothing
+is auto-applied — if a captured value isn't named under `headers:`,
+`cookies:`, or `query:`, it's never sent:
+
+```yaml
+auth:
+  type: login
+  loginPath: /auth/token          # required
+  loginMethod: POST                # default POST
+  usernameField: email             # login request body field names
+  passwordField: password
+  username: ${env:AC_USER}
+  password: ${env:AC_PASS}
+  capture:                         # same shape/extractors as a step's capture:
+    token:   "$.data.token"                              # jsonpath (default)
+    csrf:    { from: header, path: x-csrf-token }
+    session: { from: cookie, path: QA_SESSION }           # new: cookie extractor
+  headers:
+    Authorization: "Bearer ${token}"
+    X-CSRF-TOKEN: "${csrf}"
+  cookies:
+    QA_SESSION: "${session}"
+  query: {}                        # same idea, for query-param auth
+```
+
+`capture:` reuses the extractor registry — including the new `cookie`
+extractor (`{from: cookie, path: <name>}`, pulls one named cookie's value
+out of `Set-Cookie`, usable in step `capture:`/`expect:` too, not just
+here). `headers:`/`cookies:`/`query:` are plain `${...}` templates resolved
+against the captured values, so `${token}` only works if something in
+`capture:` actually captured a variable named `token`.
+
+`login` is available to `loadsuites/*.yml` scenarios too — the load runner
+resolves auth through the same registry as correctness suites.
 
 ---
 
@@ -668,8 +710,8 @@ src/actf/
   ctx.py         ${...} resolution, type-preserving
   evaluators.py  env / uuid / now / randomInt / file
   matchers.py    14 built-ins + registry
-  extractors.py  jsonpath / header / status / body + registry
-  auth.py        bearer / password / none
+  extractors.py  jsonpath / header / status / body / cookie + registry
+  auth.py        bearer / password / login / none
   transport.py   Transport protocol + LiveHttpTransport (httpx) + AsyncHttpTransport
   engine.py      execute -> assert -> capture -> retry -> cleanup
   report.py      Allure integration + secret masking

@@ -101,6 +101,69 @@ def test_unsupported_auth_type_is_rejected():
     assert "kerberos" in str(exc.value)
 
 
+def test_login_auth_requires_login_path():
+    with pytest.raises(SuiteError) as exc:
+        parse_suite({**MINIMAL, "auth": {"type": "login"}})
+    assert "loginPath" in str(exc.value)
+
+
+def test_login_auth_parses_full_shape():
+    s = parse_suite({**MINIMAL, "auth": {
+        "type": "login",
+        "loginPath": "/custom/login",
+        "loginMethod": "put",
+        "usernameField": "email",
+        "passwordField": "pass",
+        "username": "u",
+        "password": "p",
+        "capture": {
+            "token": "$.data.token",
+            "csrf": {"from": "header", "path": "x-csrf-token"},
+            "session": {"from": "cookie", "path": "QA_SESSION"},
+        },
+        "headers": {"Authorization": "Bearer ${token}", "X-CSRF-TOKEN": "${csrf}"},
+        "cookies": {"QA_SESSION": "${session}"},
+        "query": {"apiToken": "${token}"},
+    }})
+    auth = s.auth
+    assert auth.type == "login"
+    assert auth.login_path == "/custom/login"
+    assert auth.login_method == "PUT"
+    assert auth.username_field == "email"
+    assert auth.password_field == "pass"
+    assert [c.name for c in auth.login_captures] == ["token", "csrf", "session"]
+    assert auth.login_captures[2].source == "cookie"
+    assert auth.login_headers == {"Authorization": "Bearer ${token}", "X-CSRF-TOKEN": "${csrf}"}
+    assert auth.login_cookies == {"QA_SESSION": "${session}"}
+    assert auth.login_query == {"apiToken": "${token}"}
+
+
+def test_login_auth_defaults_method_and_field_names():
+    s = parse_suite({**MINIMAL, "auth": {"type": "login", "loginPath": "/login"}})
+    auth = s.auth
+    assert auth.login_method == "POST"
+    assert auth.username_field == "username"
+    assert auth.password_field == "password"
+    assert auth.login_captures == ()
+    assert auth.login_headers == {}
+
+
+def test_login_auth_rejects_unknown_key():
+    with pytest.raises(SuiteError) as exc:
+        parse_suite({**MINIMAL, "auth": {
+            "type": "login", "loginPath": "/login", "bogus": True}})
+    assert "unknown key" in str(exc.value)
+
+
+def test_login_auth_rejects_plain_auth_keys_not_valid_for_login():
+    """token: is a bearer-only key — using it under type: login should be
+    rejected the same way an unknown key would, not silently ignored."""
+    with pytest.raises(SuiteError) as exc:
+        parse_suite({**MINIMAL, "auth": {
+            "type": "login", "loginPath": "/login", "token": "x"}})
+    assert "unknown key" in str(exc.value)
+
+
 def test_capture_shorthand_and_longhand():
     s = parse_suite({"name": "s", "steps": [
         {"name": "a", "request": {"method": "GET", "path": "/x"},

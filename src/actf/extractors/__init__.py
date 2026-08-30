@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from .base import ExtractError, Extractor, require_json
 from .body import BodyExtractor
+from .cookie import CookieExtractor
 from .function import FunctionExtractor
 from .header import HeaderExtractor
 from .inline import InlineExprExtractor
@@ -28,7 +29,7 @@ from .status import StatusExtractor
 
 BUILTIN_EXTRACTORS: tuple[Extractor, ...] = (
     JsonPathExtractor(), JsonPath2Extractor(), HeaderExtractor(),
-    StatusExtractor(), BodyExtractor(), JsonExtractor(),
+    StatusExtractor(), BodyExtractor(), JsonExtractor(), CookieExtractor(),
 )
 
 
@@ -47,7 +48,7 @@ def build_extractor_registry(
 __all__ = [
     "ExtractError", "Extractor", "require_json",
     "BUILTIN_EXTRACTORS", "build_extractor_registry",
-    "BodyExtractor", "FunctionExtractor", "HeaderExtractor",
+    "BodyExtractor", "CookieExtractor", "FunctionExtractor", "HeaderExtractor",
     "InlineExprExtractor", "JsonExtractor", "JsonPathExtractor",
     "JsonPath2Extractor", "StatusExtractor",
 ]
