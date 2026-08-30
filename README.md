@@ -418,6 +418,247 @@ Add `env/preprod.yml` etc. as needed. Secrets belong in env vars, never here.
 
 ---
 
+## Load testing
+
+Separate from correctness suites — a load run measures throughput and
+latency, it doesn't assert pass/fail per request. Scenarios live in
+`loadsuites/*.yml` and run via a standalone CLI, not pytest:
+
+```bash
+python -m actf.load run loadsuites/product-list-load.yml
+python -m actf.load run loadsuites/product-list-load.yml --env preprod --json results.json
+```
+
+```yaml
+name: Product list under load
+env: qa
+auth: { type: bearer }
+
+request:
+  method: GET
+  path: /api/product
+
+profile:
+  vusers: 20        # concurrent virtual users (asyncio tasks, not threads)
+  duration: 60s      # or totalRequests: 500 — whichever you set stops the run
+  rampUp: 10s        # vusers start staggered over this window, not all at once
+  rampDown: 5s        # and taper off the same way at the end
+  targetRps: 50       # optional: hold a rate instead of "as fast as possible"
+
+thresholds:
+  maxErrorRate: 0.02  # fraction, 0.0-1.0
+  maxP95Ms: 800
+  maxP99Ms: 1500
+  maxStatus: 500       # a response >= this status counts as an error (default 400)
+```
+
+While a stage runs, a live status line updates every 2s (requests, RPS,
+error%) so a long `duration:` run isn't silent — `--progress-interval 0`
+disables it. It's cleared before the final table prints.
+
+Console output is a per-stage table (requests, error%, RPS, p50/p95/p99,
+max latency); `--json` writes the same numbers machine-readable. The process
+exits non-zero if any stage breached its thresholds.
+
+### Finding the breaking point — sweeps
+
+For "how big can the payload get before this breaks" style testing, add a
+`sweep:`. Each stage runs the full load `profile:` against a variant of the
+request; the sweep **stops at the first stage that breaches `thresholds:`**
+rather than continuing to hammer an already-degraded endpoint — the finding
+*is* which stage broke.
+
+Two stage shapes, pick whichever fits the mutation:
+
+```yaml
+# Scalar sweep: same request, one number grows each stage.
+sweep:
+  - label: "descriptionLen"
+    vars:
+      description: { range: [1000, 50000, 5000] }   # 1000, 6000, 11000, ... chars
+
+# Explicit stages: for structural changes a generator can't express
+# (drop a field, change a type, add nesting) — list each one out.
+sweep:
+  - label: "missing name field"
+    request: { method: POST, path: /api/product, body: { description: "x" } }
+  - label: "name as a number instead of a string"
+    request: { method: POST, path: /api/product, body: { name: 12345 } }
+```
+
+`vars:` values are available in the request via `${name}` the same way suite
+`vars:` are; an explicit `request:` on a stage overrides the scenario's
+`request:` entirely for that stage. See
+`loadsuites/product-create-payload-sweep.yml` for a full example of both.
+
+### Multi-step flows (`flow:`) — experimental
+
+**Experimental — a few gaps are still open, listed below.** A load scenario
+can drive an ordered journey per vuser (login → create → read) instead of a
+single endpoint. Use `flow:` in place of `request:` (exactly one of the two
+is required):
+
+```yaml
+name: checkout journey
+env: qa
+auth: { type: none }          # flow steps handle their own auth, see below
+
+flow:
+  - name: login
+    request: { method: POST, path: /login, body: { user: "${user}" } }
+    capture: { token: "$.token" }
+  - name: create
+    request:
+      method: POST
+      path: /items
+      headers: { Authorization: "Bearer ${token}" }
+      body: { name: "x" }
+    capture: { itemId: "$.id" }
+  - name: read
+    request: { method: GET, path: "/items/${itemId}" }
+
+profile:
+  vusers: 10
+  totalRequests: 300    # counts individual requests, not journeys — 100 iterations here
+```
+
+Each vuser iteration walks the flow in order; `capture:` on a step (same
+shape as a correctness suite's `capture:`) feeds `${name}` into every later
+step in that same iteration, via a fresh `SuiteContext` per iteration. The
+report gets **one row per flow step**, labeled `scenario/stepName`, so you
+can see exactly which step in the journey is slow or breaking rather than
+one blended number for the whole flow.
+
+A few things work differently from a single-`request:` scenario, by design:
+
+- **`targetRps`/`vusers` pace whole iterations** (one journey per tick);
+  **`totalRequests` counts individual HTTP requests** across all steps, not
+  journeys — matching what a real client would call "requests sent." A
+  3-step flow with `totalRequests: 300` runs 100 iterations.
+- **No per-step auth.** A flow step is just a request — there's no
+  auth-state machinery threading a login through the rest of the iteration
+  automatically. Use `auth: {type: none}` and thread a captured token into
+  later steps' `headers:` yourself, as in the example above.
+- **A failing step doesn't abort the iteration.** If `login` errors (bad
+  status, or a capture that can't resolve), `create` and `read` still run
+  that iteration with whatever's available — a missing `${token}` just
+  fails whichever step actually needs it, recorded as an error for that
+  step alone. This means every step gets full load even when an earlier one
+  is flaky, at the cost of downstream steps failing on missing captures
+  until the upstream issue is fixed.
+- **Thresholds apply uniformly to every step's summary.** There's no
+  per-step override yet, so a `thresholds:` block tuned for a fast cached
+  read may be too strict for a slower login step. Any step breaching stops
+  processing (there's no sweep support for flows yet, so this only matters
+  for the exit-code/`breach_reason` on that step's row).
+- **No sweep, no live progress, no `--csv-samples`, no `expect:` per step**
+  yet for flow scenarios — see the "Not built yet" list.
+
+### Warm-up period
+
+Connection-pool cold start (DNS, TLS handshake, first request) can skew
+p50/p95/p99 on short or moderate stages. Discard the early samples from the
+stats without discarding the requests themselves:
+
+```yaml
+profile:
+  vusers: 20
+  duration: 60s
+  warmUp:
+    seconds: 5      # discard samples taken in the first 5s of the stage
+    requests: 50     # AND/OR discard the first 50 samples (across all vusers)
+```
+
+Either knob (or both) can be set — a sample is warm-up if *either* condition
+still holds. Warm-up requests are still sent and still counted in the total
+requests dispatched (so `route.call_count`-style assertions and error
+budgets aren't silently different), just excluded from `requests`,
+`error_rate`, and the percentiles in the summary; the discarded count shows
+up separately as `warm_up_requests` in the console note and the JSON output.
+
+### Response body assertions (`expect:`)
+
+A status code alone can't catch "200 OK but the body says FAILED." Add an
+`expect:` list — reuses the same extractors/matchers as correctness suites
+(see the built-in matcher table above):
+
+```yaml
+expect:
+  - { path: "$.status", neq: "FAILED" }
+  - { path: "$.items", notEmpty: true }
+```
+
+Any assertion failure counts the response as an error (it can trip
+`thresholds.maxErrorRate`) even on a 2xx status — `maxStatus` still owns
+status-code classification, `expect:` is for the body. A sweep `stage:` can
+override the scenario's `expect:` with its own list; omit it on a stage to
+inherit the scenario's.
+
+Only `path`/`jsonpath`/`jsonpath2`/`header`/`status`/`body` extractors and
+the built-in matchers are supported here — no `fn:`/inline-expression
+assertions, since those need `functions:` YAML wiring that load scenarios
+don't have.
+
+### CSV output
+
+```bash
+python -m actf.load run loadsuites/product-list-load.yml \
+  --csv summary.csv --csv-samples requests.csv
+```
+
+`--csv` is `--json`'s numbers in spreadsheet form — one row per stage
+summary. `--csv-samples` is the one for feeding a time-series dashboard
+(Grafana etc.): one row per request (`stage,seq,elapsed_s,latency_ms,status,
+error,warm_up`), written incrementally as the run progresses and buffered
+(flushed every 500 rows) so it doesn't hit disk on every single request.
+
+### Distributed load generation (`--workers`)
+
+One asyncio event loop caps throughput to what a single process can push.
+`--workers N` fans `vusers`/`totalRequests`/`targetRps` out evenly across N
+OS processes on this machine, each running its own event loop, and merges
+their results back into exactly one summary row per stage — same report,
+same threshold/sweep-breach behavior, just more concurrent throughput:
+
+```bash
+python -m actf.load run loadsuites/product-list-load.yml --workers 4
+```
+
+Single machine only — this is not a distributed-across-hosts load
+generator. `--workers > 1` also can't be combined with `--progress-interval`
+or `--csv-samples`: a live-progress/CSV callback can't safely cross a
+process boundary, so the CLI rejects that combination up front rather than
+silently dropping progress. Pass `--progress-interval 0` alongside
+`--workers` to run without live output.
+
+### HTML report
+
+```bash
+python -m actf.load run loadsuites/product-list-load.yml --html report.html
+```
+
+A single self-contained HTML file — no external JS/CSS, safe to email or
+drop in a shared folder — with per-stage bar charts (RPS, p95/p99 latency,
+error rate) plus the same numbers as the console table, breached stages
+highlighted. Stage-level only, even alongside `--csv-samples`: charting tens
+of thousands of per-request points would either bloat the single-file
+promise or need a JS runtime. Per-request time series is what `--csv-samples`
+is for; this report answers "which stage broke."
+
+### Design notes specific to load
+
+- **Async, not threads.** `AsyncHttpTransport` (httpx.AsyncClient) drives all
+  vusers from one event loop — cheap enough to run thousands concurrently,
+  unlike a thread per vuser.
+- **Auth resolves once, synchronously**, before load starts — same as the
+  correctness engine, and for the same reason: a single blocking login call
+  up front is a non-issue, and it keeps `AuthProvider` implementations sync.
+- **A sweep is a safety feature, not just a convenience.** Stopping at the
+  first breach means you don't spend the rest of the run hammering an
+  endpoint that's already falling over.
+
+---
+
 ## Layout
 
 ```
@@ -429,11 +670,15 @@ src/actf/
   matchers.py    14 built-ins + registry
   extractors.py  jsonpath / header / status / body + registry
   auth.py        bearer / password / none
-  transport.py   Transport protocol + LiveHttpTransport (httpx)
+  transport.py   Transport protocol + LiveHttpTransport (httpx) + AsyncHttpTransport
   engine.py      execute -> assert -> capture -> retry -> cleanup
   report.py      Allure integration + secret masking
   runner.py      pytest glue, suite discovery, tag filtering
-suites/          <- interns add files here
+  load/          load testing: model, loadio (YAML parsing), async runner,
+                 metrics (percentiles), report, html_report (SVG charts,
+                 no JS deps), __main__ (CLI)
+suites/          <- interns add correctness tests here
+loadsuites/      <- load/stress scenarios go here
 env/             per-environment config
 tests/unit/      framework's own tests (mock-based, no live env)
 ```
@@ -456,4 +701,13 @@ tests/unit/      framework's own tests (mock-based, no live env)
 - Google SSO via Playwright (`auth: {type: google}`) — deferred; there is no
   `id_token` exchange endpoint on the backend, so it needs a real browser leg.
 - In-process transport (needs a Python-side app or ASGI target).
-- Parallel step execution, response schema validation, data-driven suites.
+- Parallel step execution *within a correctness suite*, response schema
+  validation, data-driven suites. (Load scenarios — a different YAML shape —
+  do run concurrently; see **Load testing** above.)
+- Multi-machine distributed load (`--workers` fans out across processes on
+  one machine only, not across hosts).
+- Flow scenarios still have open gaps — see **Multi-step flows** below:
+  per-step thresholds, sweeps over a flow, and live progress/CSV-sample
+  streaming (`on_progress` gets a `dict[str, StageMetrics]` for a flow, not
+  a single `StageMetrics`, so `LiveProgressPrinter`/`CsvSampleWriter` from
+  the sections above don't work against a flow scenario yet).

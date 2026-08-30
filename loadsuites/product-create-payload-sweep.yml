@@ -1,0 +1,38 @@
+name: Product create — find the payload size that breaks it
+env: qa
+
+auth: { type: bearer }
+
+request:
+  method: POST
+  path: /api/product
+  body:
+    name: "apitest-${uuid}"
+    description: "${file:payloads/blob.txt}"   # overwritten per stage by `vars`
+
+profile:
+  vusers: 10
+  totalRequests: 200
+
+thresholds:
+  maxErrorRate: 0.05
+  maxP95Ms: 2000
+  maxStatus: 500
+
+# Scalar sweep: same request shape, description grows each stage until the
+# API breaks or a threshold trips — the sweep stops at the first breach and
+# reports that as the finding, rather than hammering every stage regardless.
+sweep:
+  - label: "descriptionLen"
+    vars:
+      description: { range: [1000, 50000, 5000] }   # chars, per stage
+
+# Example of the OTHER mutation shape — explicit structural stages instead of
+# a scalar sweep, for when the change isn't "make one field bigger" but
+# "change the request's shape" (missing field, wrong type, extra nesting):
+#
+# sweep:
+#   - label: "missing name field"
+#     request: { method: POST, path: /api/product, body: { description: "x" } }
+#   - label: "name as a number instead of a string"
+#     request: { method: POST, path: /api/product, body: { name: 12345 } }

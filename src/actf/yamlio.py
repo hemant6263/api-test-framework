@@ -43,7 +43,7 @@ _STEP_KEYS = {"name", "request", "expect", "capture", "retry"}
 _REQUEST_KEYS = {"method", "path", "headers", "query", "body"}
 
 
-def _require_mapping(node: Any, where: str) -> dict:
+def require_mapping(node: Any, where: str) -> dict:
     if node is None:
         return {}
     if not isinstance(node, dict):
@@ -59,8 +59,8 @@ def _reject_unknown(node: dict, allowed: set[str], where: str) -> None:
             f"{where}: unknown key(s) {sorted(unknown)}. Allowed: {opts}")
 
 
-def _parse_request(node: Any, where: str) -> RequestSpec:
-    node = _require_mapping(node, where)
+def parse_request(node: Any, where: str) -> RequestSpec:
+    node = require_mapping(node, where)
     _reject_unknown(node, _REQUEST_KEYS, where)
     if "method" not in node:
         raise SuiteError(f'{where}: missing required key "method"')
@@ -77,14 +77,14 @@ def _parse_request(node: Any, where: str) -> RequestSpec:
     return RequestSpec(
         method=method,
         path=path,
-        headers=_require_mapping(node.get("headers"), f"{where}.headers"),
-        query=_require_mapping(node.get("query"), f"{where}.query"),
+        headers=require_mapping(node.get("headers"), f"{where}.headers"),
+        query=require_mapping(node.get("query"), f"{where}.query"),
         body=node.get("body"),
     )
 
 
-def _parse_assertion(node: Any, where: str) -> AssertionSpec:
-    node = _require_mapping(node, where)
+def parse_assertion(node: Any, where: str) -> AssertionSpec:
+    node = require_mapping(node, where)
     source = str(node.get("from", "jsonpath"))
     # `expr:` on its own selects the inline-expression extractor.
     if "expr" in node and "path" not in node and "from" not in node:
@@ -120,7 +120,7 @@ def _parse_assertion(node: Any, where: str) -> AssertionSpec:
 def _parse_expect(node: Any, where: str) -> ExpectSpec | None:
     if node is None:
         return None
-    node = _require_mapping(node, where)
+    node = require_mapping(node, where)
     _reject_unknown(node, {"status", "assertions"}, where)
     status = node.get("status")
     if status is not None and not isinstance(status, int):
@@ -129,12 +129,12 @@ def _parse_expect(node: Any, where: str) -> ExpectSpec | None:
     if not isinstance(raw, list):
         raise SuiteError(f"{where}.assertions: expected a list")
     items = tuple(
-        _parse_assertion(a, f"{where}.assertions[{i}]") for i, a in enumerate(raw))
+        parse_assertion(a, f"{where}.assertions[{i}]") for i, a in enumerate(raw))
     return ExpectSpec(status=status, assertions=items)
 
 
-def _parse_captures(node: Any, where: str) -> tuple[CaptureSpec, ...]:
-    node = _require_mapping(node, where)
+def parse_captures(node: Any, where: str) -> tuple[CaptureSpec, ...]:
+    node = require_mapping(node, where)
     out = []
     for name, spec in node.items():
         if isinstance(spec, str):
@@ -159,7 +159,7 @@ def _parse_captures(node: Any, where: str) -> tuple[CaptureSpec, ...]:
 def _parse_retry(node: Any, where: str) -> RetrySpec | None:
     if node is None:
         return None
-    node = _require_mapping(node, where)
+    node = require_mapping(node, where)
     _reject_unknown(
         node,
         {"until", "timeout", "interval", "times", "backoff", "maxInterval"},
@@ -204,7 +204,7 @@ def _parse_retry(node: Any, where: str) -> RetrySpec | None:
 
 
 def _parse_step(node: Any, where: str, *, require_name: bool = True) -> Step:
-    node = _require_mapping(node, where)
+    node = require_mapping(node, where)
     _reject_unknown(node, _STEP_KEYS, where)
     if "request" not in node:
         raise SuiteError(f'{where}: missing required key "request"')
@@ -215,15 +215,15 @@ def _parse_step(node: Any, where: str, *, require_name: bool = True) -> Step:
         name = f"{node['request'].get('method', '?')} {node['request'].get('path', '?')}"
     return Step(
         name=str(name),
-        request=_parse_request(node["request"], f"{where}.request"),
+        request=parse_request(node["request"], f"{where}.request"),
         expect=_parse_expect(node.get("expect"), f"{where}.expect"),
-        captures=_parse_captures(node.get("capture"), f"{where}.capture"),
+        captures=parse_captures(node.get("capture"), f"{where}.capture"),
         retry=_parse_retry(node.get("retry"), f"{where}.retry"),
     )
 
 
-def _parse_auth(node: Any, where: str) -> AuthSpec:
-    node = _require_mapping(node, where)
+def parse_auth(node: Any, where: str) -> AuthSpec:
+    node = require_mapping(node, where)
     if not node:
         return AuthSpec()
     _reject_unknown(node, {"type", "token", "username", "password"}, where)
@@ -241,7 +241,7 @@ def _parse_auth(node: Any, where: str) -> AuthSpec:
 
 
 def parse_suite(data: Any, source_path: str = "<memory>") -> Suite:
-    data = _require_mapping(data, source_path)
+    data = require_mapping(data, source_path)
     _reject_unknown(data, _SUITE_KEYS, source_path)
     if "name" not in data:
         raise SuiteError(f'{source_path}: missing required key "name"')
@@ -269,8 +269,8 @@ def parse_suite(data: Any, source_path: str = "<memory>") -> Suite:
         steps=steps,
         env=data.get("env"),
         tags=tuple(str(t) for t in tags),
-        auth=_parse_auth(data.get("auth"), f"{source_path}.auth"),
-        vars=_require_mapping(data.get("vars"), f"{source_path}.vars"),
+        auth=parse_auth(data.get("auth"), f"{source_path}.auth"),
+        vars=require_mapping(data.get("vars"), f"{source_path}.vars"),
         cleanup=cleanup,
         source_path=source_path,
     )
@@ -300,7 +300,7 @@ def load_env(path: str | Path) -> EnvConfig:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as exc:
         raise SuiteError(f"{path}: invalid YAML — {exc}") from exc
-    raw = _require_mapping(raw, str(path))
+    raw = require_mapping(raw, str(path))
     base_url = raw.get("baseUrl") or raw.get("base_url")
     if not base_url:
         raise SuiteError(f'{path}: missing required key "baseUrl"')
@@ -310,7 +310,7 @@ def load_env(path: str | Path) -> EnvConfig:
         base_url=str(base_url).rstrip("/"),
         timeout=parse_duration(raw.get("timeout", "30s"), f"{path}.timeout"),
         verify_tls=bool(raw.get("verifyTls", raw.get("verify_tls", True))),
-        headers=_require_mapping(raw.get("headers"), f"{path}.headers"),
+        headers=require_mapping(raw.get("headers"), f"{path}.headers"),
         extra={k: v for k, v in raw.items() if k not in known},
     )
 
