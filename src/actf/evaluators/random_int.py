@@ -1,6 +1,8 @@
 """Random-integer evaluator."""
 from __future__ import annotations
 
+from typing import Any
+
 import random
 
 from .base import ResolveError

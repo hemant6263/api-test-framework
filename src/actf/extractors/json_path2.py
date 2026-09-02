@@ -1,6 +1,8 @@
 """JsonPath2 (jsonpath-python) — correct numeric comparisons."""
 from __future__ import annotations
 
+from typing import Any
+
 from ..matchers import MISSING
 from .base import ExtractError, require_json
 

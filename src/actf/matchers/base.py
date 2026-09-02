@@ -17,7 +17,6 @@ built-in replaces it, deliberately.
 """
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -62,9 +61,14 @@ def _fail(actual: Any, why: str) -> MatchResult:
 
 
 class _Numeric:
-    """Shared numeric guard — comparing a str to an int raises, not silently fails."""
+    """Shared numeric guard — comparing a str to an int raises, not silently fails.
+
+    Mixin: `key` is supplied by whichever Matcher subclass mixes this in
+    (see the module docstring), not defined here.
+    """
 
     def _nums(self, actual, expected):
+        # pylint: disable=no-member  # `key` comes from the mixing-in Matcher subclass
         if isinstance(actual, bool) or not isinstance(actual, (int, float)):
             raise MatcherError(
                 f"'{self.key}' needs a number, got {type(actual).__name__} ({actual!r})")

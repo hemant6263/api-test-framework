@@ -1,6 +1,8 @@
 """JsonPath (default engine, jsonpath-ng)."""
 from __future__ import annotations
 
+from typing import Any
+
 from jsonpath_ng.ext import parse as jsonpath_parse
 
 from ..matchers import MISSING

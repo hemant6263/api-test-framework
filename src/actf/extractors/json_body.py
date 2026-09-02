@@ -1,6 +1,8 @@
 """Whole parsed body extractor."""
 from __future__ import annotations
 
+from typing import Any
+
 from .base import require_json
 
 

@@ -1,6 +1,8 @@
 """File-contents evaluator, sandboxed to the suite directory."""
 from __future__ import annotations
 
+from typing import Any
+
 from pathlib import Path
 
 from .base import ResolveError
