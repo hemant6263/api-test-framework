@@ -336,6 +336,61 @@ pytest tests/unit -q                                 # framework's own tests
 Each suite is one Allure test; each step is an Allure step with the request and
 response attached as JSON, secrets masked.
 
+### Running suites in parallel
+
+Each suite is a separate `pytest.mark.parametrize` case (`test_suite[suite-name]`
+in `tests/test_suites.py`), so pytest already treats them as independent test
+items — nothing about the runner itself is sequential, it's just that plain
+`pytest` executes test items one at a time. Install
+[`pytest-xdist`](https://pypi.org/project/pytest-xdist/) (included in the `test`
+extra) to fan them out across workers:
+
+```bash
+.venv/bin/pip install -e ".[test,allure]"   # pulls in pytest-xdist
+
+pytest tests/test_suites.py -n auto -m live      # one worker per CPU core
+pytest tests/test_suites.py -n 8 -m live         # or a fixed worker count
+```
+
+Safe by default: every bundled suite names its own resources with `${uuid}`
+and cleans up after itself, so suites never collide when run concurrently.
+Each xdist worker is a separate process, so the `session`-scoped `SuiteSession`
+fixture is per-worker, not shared across workers.
+
+If you add a suite that touches a **fixed, shared resource** (a well-known
+name, a singleton record, a rate-limited endpoint), either give it a unique
+name too, or pull it out of parallel runs with a dedicated tag:
+
+```bash
+pytest tests/test_suites.py -m "live and not serial" -n auto   # parallel-safe suites
+pytest tests/test_suites.py -m "live and serial" -n 0           # one at a time
+```
+
+#### Checklist: is a suite safe to run in parallel?
+
+Before adding a new suite (or moving an existing one out of `serial`), confirm:
+
+- [ ] **Every resource it creates has a unique name** — suffix with `${uuid}`
+      (see `productName`, `testEmail` in the existing suites), never a fixed
+      literal another run could also use.
+- [ ] **Every read/update/delete targets an ID this suite itself captured** —
+      via `capture:` from its own `create` step — never a fixed ID, a
+      well-known/default record, or a filter broad enough to match another
+      suite's or worker's data.
+- [ ] **Cleanup deletes by captured ID, not by a filter** — `DELETE
+      /resource/${capturedId}`, never "delete anything matching this name/
+      email/filter," which could sweep up a concurrently running suite's data.
+- [ ] **No dependency on another suite having already run** — no shared
+      `vars`, no assumption about ordering or state left behind by a
+      different `.yml` file. Suites run in whatever order xdist schedules them.
+- [ ] **Doesn't hit a rate-limited or quota'd endpoint** at a volume that only
+      breaks under N-way concurrency (not a data collision, but same symptom:
+      a flake that only reproduces under `-n`).
+
+If any box can't be checked, tag the suite `serial` and keep it out of `-n
+auto` runs (`-m "live and serial" -n 0`) rather than risk an intermittent
+failure that's hard to reproduce outside CI.
+
 ---
 
 ## Retry / polling
